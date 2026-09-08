@@ -65,19 +65,18 @@ pub(crate) fn veyyon_extension_dir() -> io::Result<PathBuf> {
         return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("extensions"));
     }
 
-    let config_root = match std::env::var_os(VEYYON_CONFIG_DIR_ENV_VAR)
-        .filter(|value| !value.is_empty())
-    {
-        Some(value) => {
-            let path = PathBuf::from(value);
-            if path.is_absolute() {
-                path
-            } else {
-                home_dir()?.join(path)
+    let config_root =
+        match std::env::var_os(VEYYON_CONFIG_DIR_ENV_VAR).filter(|value| !value.is_empty()) {
+            Some(value) => {
+                let path = PathBuf::from(value);
+                if path.is_absolute() {
+                    path
+                } else {
+                    home_dir()?.join(path)
+                }
             }
-        }
-        None => home_dir()?.join(".veyyon"),
-    };
+            None => home_dir()?.join(".veyyon"),
+        };
     let profile = std::env::var_os(VEYYON_PROFILE_ENV_VAR)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "default".into());

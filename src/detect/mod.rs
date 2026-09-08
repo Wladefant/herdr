@@ -950,10 +950,7 @@ mod tests {
 
     #[test]
     fn veyyon_uses_hooks_with_screen_fallback() {
-        assert!(full_lifecycle_hook_authority(
-            "herdr:veyyon",
-            "veyyon"
-        ));
+        assert!(full_lifecycle_hook_authority("herdr:veyyon", "veyyon"));
         assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Veyyon));
     }
 

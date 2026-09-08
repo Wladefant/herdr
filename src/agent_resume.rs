@@ -176,11 +176,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
             // `--session` flag, unlike pi.
             vec!["omp".into(), format!("--resume={}", session_ref.value)]
         }
-        (
-            "herdr:veyyon",
-            "veyyon",
-            AgentSessionRefKind::Path | AgentSessionRefKind::Id,
-        ) => vec![
+        ("herdr:veyyon", "veyyon", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => vec![
             "veyyon".into(),
             "--resume".into(),
             session_ref.value.clone(),

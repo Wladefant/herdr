@@ -118,6 +118,7 @@ struct RecentAgentProcessExit {
 /// pane/view state no longer owns terminal identity, cwd, labels, or agent
 /// metadata.
 pub struct TerminalState {
+    pub(crate) lifecycle: super::lifecycle::Lifecycle,
     pub id: TerminalId,
     pub cwd: PathBuf,
     pub detected_agent: Option<Agent>,
@@ -151,39 +152,42 @@ pub struct TerminalState {
 }
 
 impl TerminalState {
-    pub fn new(id: TerminalId, cwd: PathBuf) -> Self {
-        Self {
-            id,
-            cwd,
-            detected_agent: None,
-            fallback_state: AgentState::Unknown,
-            fallback_visible_blocker: false,
-            fallback_observed_at: None,
-            hook_authority: None,
-            agent_metadata: HashMap::new(),
-            metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
-            persisted_agent_session: None,
-            terminal_title: None,
-            manual_label: None,
-            agent_name: None,
-            agent_name_owner: None,
-            managed_agent: None,
-            managed_agent_launch_session: None,
-            hook_report_sequences: HashMap::new(),
-            suppressed_full_lifecycle_hook_reports: HashMap::new(),
-            stale_full_lifecycle_hook_sessions: HashMap::new(),
-            metadata_report_sequences: HashMap::new(),
-            metadata_report_agents: HashMap::new(),
-            metadata_token_sequence_sources: std::collections::HashSet::new(),
-            state: AgentState::Unknown,
-            last_agent_state_change_seq: None,
-            revision: 0,
-            launch_argv: None,
-            respawn_shell_on_exit: false,
-            recent_agent_process_exit: None,
-            agent_process_acquisition_pending: false,
-            pending_agent_resume_plan: None,
+    fn replace_persisted_session(&mut self, session: Option<crate::agent_resume::PersistedAgentSession>) {
+        if self.persisted_agent_session != session {
+            self.lifecycle.invalidate();
         }
+        self.persisted_agent_session = session;
+    }
+
+    pub fn new(id: TerminalId, cwd: PathBuf) -> Self {
+        Self { id, cwd, lifecycle: super::lifecycle::Lifecycle::default(), detected_agent: None,
+        fallback_state: AgentState::Unknown,
+        fallback_visible_blocker: false,
+        fallback_observed_at: None,
+        hook_authority: None,
+        agent_metadata: HashMap::new(),
+        metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
+        persisted_agent_session: None,
+        terminal_title: None,
+        manual_label: None,
+        agent_name: None,
+        agent_name_owner: None,
+        managed_agent: None,
+        managed_agent_launch_session: None,
+        hook_report_sequences: HashMap::new(),
+        suppressed_full_lifecycle_hook_reports: HashMap::new(),
+        stale_full_lifecycle_hook_sessions: HashMap::new(),
+        metadata_report_sequences: HashMap::new(),
+        metadata_report_agents: HashMap::new(),
+        metadata_token_sequence_sources: std::collections::HashSet::new(),
+        state: AgentState::Unknown,
+        last_agent_state_change_seq: None,
+        revision: 0,
+        launch_argv: None,
+        respawn_shell_on_exit: false,
+        recent_agent_process_exit: None,
+        agent_process_acquisition_pending: false,
+        pending_agent_resume_plan: None, }
     }
 
     pub fn set_detected_agent_process_at(
@@ -508,7 +512,7 @@ impl TerminalState {
                         crate::detect::parse_agent_label(&session.agent) == agent
                     })
             {
-                self.persisted_agent_session = None;
+                self.replace_persisted_session(None);
             }
             if let Some(agent) = agent {
                 let agent_label = crate::detect::agent_label(agent);
@@ -572,7 +576,7 @@ impl TerminalState {
                 FullLifecycleHookSuppressionReason::HookClear,
             );
             self.hook_authority = None;
-            self.persisted_agent_session = durable_session;
+            self.replace_persisted_session(durable_session);
         }
         if agent_released {
             self.clear_agent_name();
@@ -725,7 +729,7 @@ impl TerminalState {
                 }
             }
         }
-        self.persisted_agent_session = None;
+        self.replace_persisted_session(None);
         self.hook_authority = Some(HookAuthority {
             source,
             agent_label,
@@ -1159,11 +1163,11 @@ impl TerminalState {
         for (source, agent_label, session_ref, pending) in validated_replacement_sessions {
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
             self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
-            self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
+            self.replace_persisted_session(Some(crate::agent_resume::PersistedAgentSession {
                 source: source.clone(),
                 agent: agent_label,
                 session_ref,
-            });
+            }));
             if let Some(pending) = pending {
                 self.hook_report_sequences.insert(source, pending.seq);
                 self.hook_authority = Some(pending.authority);
@@ -1366,14 +1370,14 @@ impl TerminalState {
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
-        self.persisted_agent_session = Some(session);
+        self.replace_persisted_session(Some(session));
     }
 
     pub fn set_managed_agent_launch_session(
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
-        self.persisted_agent_session = Some(session.clone());
+        self.replace_persisted_session(Some(session.clone()));
         self.managed_agent_launch_session = Some(session);
     }
 
@@ -1605,7 +1609,7 @@ impl TerminalState {
         if self.managed_agent_launch_session.as_ref() == Some(&persisted_session) {
             self.managed_agent_launch_session = None;
         }
-        self.persisted_agent_session = Some(persisted_session);
+        self.replace_persisted_session(Some(persisted_session));
         let current_session = self.current_session_identity_for_persistence();
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
@@ -1723,7 +1727,7 @@ impl TerminalState {
             FullLifecycleHookSuppressionReason::HookClear,
         );
         self.hook_authority = None;
-        self.persisted_agent_session = None;
+        self.replace_persisted_session(None);
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
                 previous_agent_label,
@@ -1786,7 +1790,7 @@ impl TerminalState {
         }
         self.hook_authority = None;
         if !preserve_foreign_persisted_session {
-            self.persisted_agent_session = None;
+            self.replace_persisted_session(None);
         }
         let current_session = self.current_session_identity_for_persistence();
         Some(TerminalStateMutation {
@@ -2063,7 +2067,7 @@ impl TerminalState {
             .as_ref()
             .is_some_and(|session| self.persisted_agent_session.as_ref() == Some(session))
         {
-            self.persisted_agent_session = None;
+            self.replace_persisted_session(None);
         }
         self.agent_name = None;
         self.agent_name_owner = None;
@@ -2076,12 +2080,12 @@ impl TerminalState {
         self.fallback_visible_blocker = false;
         self.fallback_observed_at = None;
         self.hook_authority = None;
-        self.persisted_agent_session = None;
+        self.replace_persisted_session(None);
         self.agent_metadata.clear();
         self.metadata_report_agents.clear();
         self.suppressed_full_lifecycle_hook_reports.clear();
         self.stale_full_lifecycle_hook_sessions.clear();
-        self.state = AgentState::Unknown;
+        { self.lifecycle.invalidate(); self.state = AgentState::Unknown; };
         self.last_agent_state_change_seq = None;
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
@@ -2168,6 +2172,7 @@ impl TerminalState {
 
         let presentation = self.effective_presentation_for_state_at(state, now);
         self.clear_expiry_pending_for_hidden_metadata();
+                self.lifecycle.observe(state);
 
         if previous_agent_label == agent_label
             && previous_state == state

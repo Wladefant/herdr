@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
+mod lifecycle;
 mod env;
 mod integrations;
 mod layouts;
@@ -583,6 +584,9 @@ impl App {
             }
         };
 
+        if let Some(terminal) = self.state.terminals.get(&terminal_id) {
+            runtime.bind_lifecycle(&terminal.lifecycle);
+        }
         self.terminal_runtimes.insert(terminal_id.clone(), runtime);
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.clear_agent_runtime_identity_after_respawn();
@@ -1062,7 +1066,7 @@ impl App {
                 return self.handle_agent_view_clear(request.id, params)
             }
             Method::AgentStart(params) => return self.handle_agent_start(request.id, params),
-            Method::AgentPrompt(_) => {
+            Method::AgentPrompt(_) | Method::AgentLifecycle(_) => {
                 return responses::encode_error(
                     request.id,
                     "invalid_request",

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 pub mod agents;
+pub mod lifecycle;
+pub use lifecycle::*;
 pub mod commands;
 pub mod common;
 pub mod events;
@@ -264,6 +266,8 @@ pub enum Method {
     PluginPaneFocus(PluginPaneFocusParams),
     #[serde(rename = "plugin.pane.close")]
     PluginPaneClose(PluginPaneCloseParams),
+    #[serde(rename = "agent.lifecycle")]
+    AgentLifecycle(AgentLifecycleParams),
 }
 
 #[cfg(test)]

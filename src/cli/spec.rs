@@ -336,6 +336,13 @@ fn agent_command() -> Command {
                 .after_help("Use esc as the canonical Escape key name; escape is also accepted."),
         )
         .subcommand(
+            Command::new("lifecycle")
+                .about("Atomically submit to idle agents or abort an observed generation")
+                .arg(required("target", "TARGET"))
+                .arg(required("action", "ACTION").value_parser(["snapshot", "submit", "abort"]))
+                .arg(Arg::new("value").value_name("TEXT_OR_GENERATION")),
+        )
+        .subcommand(
             Command::new("prompt")
                 .about("Submit a prompt to an agent")
                 .override_usage("herdr agent prompt <TARGET> <TEXT> [OPTIONS]")

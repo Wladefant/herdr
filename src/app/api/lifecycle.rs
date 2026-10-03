@@ -71,8 +71,12 @@ impl App {
                     return Err(encode_error(id.to_owned(), "empty_agent_prompt", "Prompt must not be empty"));
                 }
                 let delivery = owner.submit().map_err(|code| encode_error(id.to_owned(), code, "Agent is not idle"))?;
-                let delay = super::agents::agent_prompt_submit_delay(expected_agent, text.len());
+                let delay = super::agents::AGENT_PROMPT_SUBMIT_DELAY;
                 let (mut text, enter) = crate::app::api_helpers::encode_api_submission_parts(runtime, &text);
+                #[cfg(windows)]
+                if expected_agent == crate::detect::Agent::Codex {
+                    super::agents::append_codex_paste_boundary(runtime, &mut text);
+                }
                                 if expected_agent == crate::detect::Agent::GithubCopilot {
                                     let mut focus = crate::ghostty::encode_focus(crate::ghostty::FocusEvent::Gained)
                                         .map_err(|err| {

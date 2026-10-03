@@ -1,6 +1,7 @@
 //! Admission and delivery share this lock. A snapshot never grants permission to write.
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::detect::AgentState;
 
@@ -13,7 +14,13 @@ struct State {
     observed: Option<AgentState>,
     generation: u64,
     reserved: bool,
+    /// When `submit` reserved the turn; bounds how long stale detection may be trusted.
+    submitted_at: Option<Instant>,
 }
+
+/// How long detection may keep reporting the pre-submit status before the reservation is
+/// treated as a turn that finished between two polls. Past this, the detected status wins.
+const SUBMIT_SETTLE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub(crate) struct Lifecycle(Arc<Mutex<State>>);
@@ -33,6 +40,7 @@ impl Default for Lifecycle {
             observed: None,
             generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
             reserved: false,
+            submitted_at: None,
         })))
     }
 }
@@ -63,6 +71,7 @@ impl Lifecycle {
         state.status = AgentState::Unknown;
         state.observed = None;
         state.reserved = false;
+        state.submitted_at = None;
         write()
     }
 
@@ -73,21 +82,35 @@ impl Lifecycle {
             state.status = AgentState::Unknown;
             state.observed = None;
             state.reserved = false;
+            state.submitted_at = None;
             state
         })
     }
 
     /// Only a real change in the detected status invalidates outstanding operations; a no-op
-    /// recompute, or detection still reporting the pre-submit status, must not.
+    /// recompute, or detection still reporting the pre-submit status, must not. The dedupe
+    /// never blocks the state update itself: once the lifecycle disagrees with detection and
+    /// no fresh submit is waiting on it, the detected status is applied.
     pub(crate) fn observe(&self, status: AgentState) {
+        self.observe_at(status, Instant::now());
+    }
+
+    fn observe_at(&self, status: AgentState, now: Instant) {
         let mut state = self.lock();
         if state.observed == Some(status) {
-            return;
+            let settling = state.reserved
+                && state
+                    .submitted_at
+                    .is_some_and(|at| now.saturating_duration_since(at) < SUBMIT_SETTLE);
+            if state.status == status || settling {
+                return;
+            }
         }
         state.observed = Some(status);
         state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         state.status = status;
         state.reserved = false;
+        state.submitted_at = None;
     }
 
     /// Untracked input or a replaced occupant invalidates every outstanding operation.
@@ -97,6 +120,7 @@ impl Lifecycle {
         state.status = AgentState::Unknown;
         state.observed = None;
         state.reserved = false;
+        state.submitted_at = None;
     }
 
     pub(crate) fn snapshot(&self) -> (AgentState, String) {
@@ -122,6 +146,7 @@ impl Lifecycle {
         state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         state.status = AgentState::Working;
         state.reserved = true;
+        state.submitted_at = Some(Instant::now());
         Ok(Delivery { owner: self.clone(), generation: state.generation, status: state.status, abort: false })
     }
 
@@ -155,6 +180,7 @@ impl Delivery {
                 state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
                 state.status = AgentState::Unknown;
                 state.reserved = false;
+                state.submitted_at = None;
             }
         }
     }
@@ -177,6 +203,39 @@ mod tests {
         let _delivery = idle.submit().unwrap();
         idle.observe(AgentState::Idle);
         assert!(idle.submit().is_err(), "stale idle detection must not reopen a reserved turn");
+    }
+
+    #[test]
+    fn fast_turn_between_polls_does_not_wedge_working() {
+        let owner = Lifecycle::default();
+        owner.observe(AgentState::Idle);
+        let _delivery = owner.submit().unwrap();
+        // The agent answered before detection ever saw Working: detection keeps saying Idle.
+        owner.observe_at(AgentState::Idle, Instant::now() + SUBMIT_SETTLE);
+        assert_eq!(owner.snapshot().0, AgentState::Idle);
+        assert!(owner.submit().is_ok(), "a finished turn must not leave the agent busy");
+    }
+
+    #[test]
+    fn stale_idle_inside_settle_window_keeps_reservation() {
+        let owner = Lifecycle::default();
+        owner.observe(AgentState::Idle);
+        let _delivery = owner.submit().unwrap();
+        owner.observe_at(AgentState::Idle, Instant::now());
+        assert_eq!(owner.submit().unwrap_err(), "agent_busy");
+    }
+
+    #[test]
+    fn aborted_turn_adopts_the_next_detected_status() {
+        let owner = Lifecycle::default();
+        owner.observe(AgentState::Working);
+        let generation = owner.snapshot().1;
+        let delivery = owner.abort(&generation).unwrap();
+        delivery.write(|| Ok(())).unwrap();
+        delivery.complete();
+        assert_eq!(owner.snapshot().0, AgentState::Unknown);
+        owner.observe(AgentState::Working);
+        assert_eq!(owner.snapshot().0, AgentState::Working);
     }
 
     #[test]

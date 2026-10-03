@@ -1222,6 +1222,63 @@
     },
     "request": {
       "$defs": {
+        "AgentLifecycleParams": {
+          "oneOf": [
+            {
+              "properties": {
+                "action": {
+                  "const": "snapshot",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "action": {
+                  "const": "submit",
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "action": {
+                  "const": "abort",
+                  "type": "string"
+                },
+                "generation": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "generation"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
         "AgentPromptParams": {
           "properties": {
             "target": {
@@ -6378,6 +6435,22 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.lifecycle",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentLifecycleParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -10518,6 +10591,30 @@
               },
               "required": [
                 "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "delivered": {
+                  "type": "boolean"
+                },
+                "generation": {
+                  "type": "string"
+                },
+                "status": {
+                  "$ref": "#/schemas/success_response/$defs/AgentStatus"
+                },
+                "type": {
+                  "const": "agent_lifecycle",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "status",
+                "generation",
+                "delivered"
               ],
               "type": "object"
             }

@@ -17,6 +17,21 @@ use crate::layout::PaneId;
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
 impl TerminalRuntime {
+    pub(crate) fn bind_lifecycle(&self, owner: &super::lifecycle::Lifecycle) {
+        self.0.bind_lifecycle(owner);
+    }
+
+    pub(crate) fn lifecycle_matches(&self, owner: &super::lifecycle::Lifecycle) -> bool {
+        self.0.lifecycle_matches(owner)
+    }
+
+    pub(crate) fn queue_guarded_submission(
+        &self, text: Bytes, enter: Bytes, delay: std::time::Duration,
+        delivery: super::lifecycle::Delivery,
+    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+        self.0.queue_guarded_submission(text, enter, delay, delivery)
+    }
+
     pub fn shutdown(self) {
         self.0.shutdown();
     }

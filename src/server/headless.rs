@@ -3040,6 +3040,12 @@ impl HeadlessServer {
             let _ = msg.respond_to.send(response);
             return changed;
         }
+        if let api::schema::Method::AgentLifecycle(params) = &msg.request.method {
+            self.app.handle_lifecycle_request(
+                msg.request.id.clone(), params.clone(), msg.respond_to,
+            );
+            return true;
+        }
         let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request);
         if matches!(&msg.request.method, api::schema::Method::AgentPrompt(_)) {
             let deferred_changed = self

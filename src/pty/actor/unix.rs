@@ -72,8 +72,9 @@ pub(crate) struct PtyIoActorConfig {
 }
 
 enum PtyIoDataCommand {
-    WriteUserInput(Bytes),
+    WriteUserInput(Bytes, crate::terminal::lifecycle_binding::InputGuard),
     SubmitUserInput {
+        guard: crate::terminal::lifecycle_binding::InputGuard,
         text: Bytes,
         enter: Bytes,
         delay: Duration,
@@ -92,6 +93,7 @@ enum PtyIoControlCommand {
 
 #[derive(Clone)]
 pub(crate) struct PtyIoActorHandle {
+    pub(crate) lifecycle: crate::terminal::lifecycle_binding::LifecycleBinding,
     data_tx: mpsc::Sender<PtyIoDataCommand>,
     control_tx: std_mpsc::Sender<PtyIoControlCommand>,
     wake: fd::WakeWriter,
@@ -106,10 +108,9 @@ struct UserWriteGate {
 }
 
 impl PtyIoActorHandle {
-    pub(crate) fn try_write_user_input(
-        &self,
-        bytes: Bytes,
-    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+    pub(crate) fn try_write_user_input(&self,
+    bytes: Bytes,) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        self.lifecycle.invalidate();
         let user_writes = self
             .user_writes
             .lock()
@@ -119,20 +120,20 @@ impl PtyIoActorHandle {
         }
         match self
             .data_tx
-            .try_send(PtyIoDataCommand::WriteUserInput(bytes))
+            .try_send(PtyIoDataCommand::WriteUserInput(bytes, crate::terminal::lifecycle_binding::InputGuard::Untracked(self.lifecycle.clone())))
         {
             Ok(()) => {
                 self.wake_actor();
                 Ok(())
             }
             Err(mpsc::error::TrySendError::Full(command)) => {
-                let PtyIoDataCommand::WriteUserInput(bytes) = command else {
+                let PtyIoDataCommand::WriteUserInput(bytes, _) = command else {
                     unreachable!("queued write returned another command")
                 };
                 Err(mpsc::error::TrySendError::Full(bytes))
             }
             Err(mpsc::error::TrySendError::Closed(command)) => {
-                let PtyIoDataCommand::WriteUserInput(bytes) = command else {
+                let PtyIoDataCommand::WriteUserInput(bytes, _) = command else {
                     unreachable!("queued write returned another command")
                 };
                 Err(mpsc::error::TrySendError::Closed(bytes))
@@ -140,41 +141,44 @@ impl PtyIoActorHandle {
         }
     }
 
-    pub(crate) fn queue_user_input_submission(
-        &self,
-        text: Bytes,
-        enter: Bytes,
-        delay: Duration,
-    ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
-        let user_writes = self
-            .user_writes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !user_writes.accepting {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "pty actor closed",
-            ));
-        }
-        let (reply_tx, reply_rx) = std_mpsc::channel();
-        self.data_tx
-            .try_send(PtyIoDataCommand::SubmitUserInput {
-                text,
-                enter,
-                delay,
-                reply: reply_tx,
-            })
-            .map_err(|err| match err {
-                mpsc::error::TrySendError::Full(_) => {
-                    std::io::Error::new(std::io::ErrorKind::WouldBlock, "pty input queue is full")
-                }
-                mpsc::error::TrySendError::Closed(_) => {
-                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pty actor closed")
-                }
-            })?;
-        self.wake_actor();
-        Ok(reply_rx)
+    pub(crate) fn queue_user_input_submission(&self, text: Bytes, enter: Bytes, delay: Duration) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
+        self.lifecycle.invalidate();
+        self.queue_input_submission(text, enter, delay, crate::terminal::lifecycle_binding::InputGuard::Untracked(self.lifecycle.clone()))
     }
+    
+    pub(crate) fn queue_guarded_submission(&self, text: Bytes, enter: Bytes, delay: Duration, delivery: crate::terminal::lifecycle::Delivery) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
+        self.queue_input_submission(text, enter, delay, crate::terminal::lifecycle_binding::InputGuard::Guarded(delivery))
+    }
+    
+    fn queue_input_submission(&self, text: Bytes, enter: Bytes, delay: Duration, guard: crate::terminal::lifecycle_binding::InputGuard) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> { let user_writes = self
+        .user_writes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !user_writes.accepting {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pty actor closed",
+        ));
+    }
+    let (reply_tx, reply_rx) = std_mpsc::channel();
+    self.data_tx
+        .try_send(PtyIoDataCommand::SubmitUserInput {
+            guard,
+            text,
+            enter,
+            delay,
+            reply: reply_tx,
+        })
+        .map_err(|err| match err {
+            mpsc::error::TrySendError::Full(_) => {
+                std::io::Error::new(std::io::ErrorKind::WouldBlock, "pty input queue is full")
+            }
+            mpsc::error::TrySendError::Closed(_) => {
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pty actor closed")
+            }
+        })?;
+    self.wake_actor();
+    Ok(reply_rx) }
 
     pub(crate) fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
         let _order = self
@@ -393,14 +397,12 @@ impl PtyIoActor {
         }));
         let controls = Arc::new(Mutex::new(SharedPtyControls::default()));
         let response_order = Arc::new(Mutex::new(()));
-        let handle = PtyIoActorHandle {
-            data_tx,
-            control_tx,
-            wake: wake_pipe.writer,
-            user_writes,
-            controls: Arc::clone(&controls),
-            response_order: Arc::clone(&response_order),
-        };
+        let handle = PtyIoActorHandle { lifecycle: Default::default(), data_tx,
+        control_tx,
+        wake: wake_pipe.writer,
+        user_writes,
+        controls: Arc::clone(&controls),
+        response_order: Arc::clone(&response_order), };
 
         let mut runner = PtyIoActorRunner {
             pane_id: config.pane_id,
@@ -458,18 +460,14 @@ struct PtyIoActorRunner {
     poll_observer: Option<std_mpsc::Sender<()>>,
 }
 
-struct ActiveSubmission {
-    enter: Bytes,
-    delay: Duration,
-    phase: SubmissionPhase,
-    reply: std_mpsc::Sender<std::io::Result<()>>,
-}
+struct ActiveSubmission { guard: crate::terminal::lifecycle_binding::InputGuard, enter: Bytes,
+delay: Duration,
+phase: SubmissionPhase,
+reply: std_mpsc::Sender<std::io::Result<()>>, }
 
-#[derive(Debug, PartialEq, Eq)]
-struct PendingWrite {
-    bytes: Bytes,
-    boundary: Option<SubmissionBoundary>,
-}
+#[derive(Debug)]
+struct PendingWrite { guard: Option<crate::terminal::lifecycle_binding::InputGuard>, bytes: Bytes,
+boundary: Option<SubmissionBoundary>, }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SubmissionBoundary {
@@ -486,19 +484,15 @@ enum SubmissionPhase {
 impl PtyIoActorRunner {
     fn enqueue_write(&mut self, bytes: Bytes) {
         if !bytes.is_empty() {
-            self.pending_writes.push_back(PendingWrite {
-                bytes,
-                boundary: None,
-            });
+            self.pending_writes.push_back(PendingWrite { guard: None, bytes,
+            boundary: None, });
         }
     }
 
-    fn enqueue_submission_write(&mut self, bytes: Bytes, boundary: SubmissionBoundary) {
+    fn enqueue_submission_write(&mut self, bytes: Bytes, boundary: SubmissionBoundary, guard: crate::terminal::lifecycle_binding::InputGuard) {
         if !bytes.is_empty() {
-            self.pending_writes.push_back(PendingWrite {
-                bytes,
-                boundary: Some(boundary),
-            });
+            self.pending_writes.push_back(PendingWrite { guard: Some(guard), bytes,
+            boundary: Some(boundary), });
         }
     }
 
@@ -636,12 +630,16 @@ impl PtyIoActorRunner {
 
     fn handle_data_command(&mut self, command: PtyIoDataCommand) -> bool {
         match command {
-            PtyIoDataCommand::WriteUserInput(bytes) => {
-                if self.state == ActorState::Running {
+            PtyIoDataCommand::WriteUserInput(bytes, guard) => {
+                if self.state == ActorState::Running && !bytes.is_empty() {
                     self.enqueue_write(bytes);
+                    if let Some(write) = self.pending_writes.back_mut() {
+                        write.guard = Some(guard);
+                    }
                 }
             }
             PtyIoDataCommand::SubmitUserInput {
+                guard,
                 text,
                 enter,
                 delay,
@@ -651,15 +649,10 @@ impl PtyIoActorRunner {
                     let phase = if text.is_empty() {
                         SubmissionPhase::WaitingUntil(Instant::now() + delay)
                     } else {
-                        self.enqueue_submission_write(text, SubmissionBoundary::Text);
+                        self.enqueue_submission_write(text, SubmissionBoundary::Text, guard.clone());
                         SubmissionPhase::WritingText
                     };
-                    self.active_submission = Some(ActiveSubmission {
-                        enter,
-                        delay,
-                        phase,
-                        reply,
-                    });
+                    self.active_submission = Some(ActiveSubmission { guard, enter, delay, phase, reply });
                 } else {
                     let _ = reply.send(Err(std::io::Error::new(
                         std::io::ErrorKind::BrokenPipe,
@@ -871,6 +864,7 @@ impl PtyIoActorRunner {
                     return;
                 };
                 debug_assert!(matches!(submission.phase, SubmissionPhase::WritingEnter));
+                submission.guard.complete();
                 let _ = submission.reply.send(Ok(()));
             }
         }
@@ -889,10 +883,12 @@ impl PtyIoActorRunner {
             let enter = enter.clone();
             if enter.is_empty() {
                 let submission = self.active_submission.take().unwrap();
+                submission.guard.complete();
                 let _ = submission.reply.send(Ok(()));
             } else {
                 self.active_submission.as_mut().unwrap().phase = SubmissionPhase::WritingEnter;
-                self.enqueue_submission_write(enter, SubmissionBoundary::Enter);
+                let guard = self.active_submission.as_ref().unwrap().guard.clone();
+                self.enqueue_submission_write(enter, SubmissionBoundary::Enter, guard);
             }
         }
     }
@@ -931,7 +927,11 @@ impl PtyIoActorRunner {
     fn flush_pending_writes_once(&mut self) -> std::io::Result<Option<SubmissionBoundary>> {
         while let Some(write) = self.pending_writes.front() {
             let chunk = &write.bytes[self.current_write_offset..];
-            match self.file.write(chunk) {
+            let result = match &write.guard {
+                Some(guard) => guard.write(|| self.file.write(chunk)),
+                None => self.file.write(chunk),
+            };
+            match result {
                 Ok(0) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::WriteZero,
@@ -948,6 +948,12 @@ impl PtyIoActorRunner {
                             return Ok(Some(boundary));
                         }
                     }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                    self.pending_writes.retain(|write| write.boundary.is_none());
+                    self.current_write_offset = 0;
+                    self.fail_active_submission(err);
+                    return Ok(None);
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return Ok(None),
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => return Ok(None),
@@ -1036,6 +1042,7 @@ fn input_submission_closed_error() -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::lifecycle_binding::{InputGuard, LifecycleBinding};
     use std::{
         io::{Read, Write},
         os::fd::{AsRawFd, FromRawFd, IntoRawFd},
@@ -1120,7 +1127,10 @@ mod tests {
     fn actor_ignores_empty_user_input_write() {
         let (mut runner, _peer) = actor_runner_for_unit_test();
 
-        assert!(!runner.handle_data_command(PtyIoDataCommand::WriteUserInput(Bytes::new())));
+        assert!(!runner.handle_data_command(PtyIoDataCommand::WriteUserInput(
+            Bytes::new(),
+            InputGuard::Untracked(LifecycleBinding::default()),
+        )));
 
         assert!(runner.pending_writes.is_empty());
     }
@@ -1128,7 +1138,11 @@ mod tests {
     #[test]
     fn submission_boundary_does_not_wait_for_following_protocol_write() {
         let (mut runner, _peer) = actor_runner_for_unit_test();
-        runner.enqueue_submission_write(Bytes::from_static(b"prompt"), SubmissionBoundary::Text);
+        runner.enqueue_submission_write(
+            Bytes::from_static(b"prompt"),
+            SubmissionBoundary::Text,
+            InputGuard::Untracked(LifecycleBinding::default()),
+        );
         runner.enqueue_write(Bytes::from_static(b"response"));
 
         assert_eq!(
@@ -1605,20 +1619,19 @@ mod tests {
         let (data_tx, _data_rx) = mpsc::channel(1);
         let (control_tx, _control_rx) = std_mpsc::channel();
         data_tx
-            .try_send(PtyIoDataCommand::WriteUserInput(Bytes::from_static(
-                b"fill",
-            )))
+            .try_send(PtyIoDataCommand::WriteUserInput(
+                Bytes::from_static(b"fill"),
+                InputGuard::Untracked(LifecycleBinding::default()),
+            ))
             .expect("fill command queue");
         let controls = Arc::new(Mutex::new(SharedPtyControls::default()));
         let (wake, _wake_read_fd) = test_wake_pair();
-        let handle = PtyIoActorHandle {
-            data_tx,
-            control_tx,
-            wake,
-            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
-            controls: Arc::clone(&controls),
-            response_order: Arc::new(Mutex::new(())),
-        };
+        let handle = PtyIoActorHandle { lifecycle: Default::default(), data_tx,
+        control_tx,
+        wake,
+        user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
+        controls: Arc::clone(&controls),
+        response_order: Arc::new(Mutex::new(())), };
 
         handle.resize(20, 80, 8, 16, vec![Bytes::from_static(b"old")]);
         handle.resize(40, 120, 9, 18, vec![Bytes::from_static(b"new")]);
@@ -1690,14 +1703,12 @@ mod tests {
             on_reader_exit: None,
             poll_observer: None,
         };
-        let handle = PtyIoActorHandle {
-            data_tx,
-            control_tx,
-            wake: wake_pipe.writer,
-            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
-            controls,
-            response_order,
-        };
+        let handle = PtyIoActorHandle { lifecycle: Default::default(), data_tx,
+        control_tx,
+        wake: wake_pipe.writer,
+        user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
+        controls,
+        response_order, };
         let (changed_tx, changed_rx) = std_mpsc::channel();
         let (continue_tx, continue_rx) = std_mpsc::channel();
 
@@ -1721,17 +1732,15 @@ mod tests {
         let runner = reader.join().expect("reader thread joins");
 
         assert_eq!(
-            runner.pending_writes,
-            VecDeque::from([
-                PendingWrite {
-                    bytes: Bytes::from_static(b"live-light"),
-                    boundary: None,
-                },
-                PendingWrite {
-                    bytes: Bytes::from_static(b"query-light"),
-                    boundary: None,
-                },
-            ])
+            runner
+                .pending_writes
+                .iter()
+                .map(|write| (&write.bytes, write.boundary))
+                .collect::<Vec<_>>(),
+            vec![
+                (&Bytes::from_static(b"live-light"), None),
+                (&Bytes::from_static(b"query-light"), None),
+            ]
         );
     }
 
@@ -1754,19 +1763,18 @@ mod tests {
         let (data_tx, _data_rx) = mpsc::channel(1);
         let (control_tx, control_rx) = std_mpsc::channel();
         data_tx
-            .try_send(PtyIoDataCommand::WriteUserInput(Bytes::from_static(
-                b"fill",
-            )))
+            .try_send(PtyIoDataCommand::WriteUserInput(
+                Bytes::from_static(b"fill"),
+                InputGuard::Untracked(LifecycleBinding::default()),
+            ))
             .expect("fill data queue");
         let (wake, _wake_read_fd) = test_wake_pair();
-        let handle = PtyIoActorHandle {
-            data_tx,
-            control_tx,
-            wake,
-            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
-            controls: Arc::new(Mutex::new(SharedPtyControls::default())),
-            response_order: Arc::new(Mutex::new(())),
-        };
+        let handle = PtyIoActorHandle { lifecycle: Default::default(), data_tx,
+        control_tx,
+        wake,
+        user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
+        controls: Arc::new(Mutex::new(SharedPtyControls::default())),
+        response_order: Arc::new(Mutex::new(())), };
 
         let handoff = std::thread::spawn(move || handle.begin_handoff(Duration::from_secs(1)));
         match control_rx
@@ -1796,9 +1804,10 @@ mod tests {
         let (data_tx, data_rx) = mpsc::channel(ACTOR_COMMAND_BUFFER);
         let (_control_tx, control_rx) = std_mpsc::channel();
         data_tx
-            .try_send(PtyIoDataCommand::WriteUserInput(Bytes::from_static(
-                b"queued-before-ack",
-            )))
+            .try_send(PtyIoDataCommand::WriteUserInput(
+                Bytes::from_static(b"queued-before-ack"),
+                InputGuard::Untracked(LifecycleBinding::default()),
+            ))
             .expect("queued write");
         let mut runner = PtyIoActorRunner {
             pane_id: 1,

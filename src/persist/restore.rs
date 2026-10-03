@@ -661,6 +661,7 @@ fn restore_tab(
                     );
                 }
                 panes.insert(*id, PaneState::new(terminal_id.clone()));
+                runtime.bind_lifecycle(&terminal.lifecycle);
                 terminal_runtimes.insert(terminal_id, runtime);
                 terminals.push(terminal);
             }

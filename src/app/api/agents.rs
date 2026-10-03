@@ -12,7 +12,7 @@ use super::responses::{encode_error, encode_error_body, encode_success};
 
 const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 
-fn agent_prompt_submit_delay(agent: crate::detect::Agent, prompt_bytes: usize) -> Duration {
+pub(super) fn agent_prompt_submit_delay(agent: crate::detect::Agent, prompt_bytes: usize) -> Duration {
     #[cfg(windows)]
     if agent == crate::detect::Agent::Codex {
         // Codex consumes Windows paste bursts at about 4 bytes/ms, then suppresses Enter briefly.

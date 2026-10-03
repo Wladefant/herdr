@@ -53,6 +53,20 @@ fn stale() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::PermissionDenied, "stale_generation")
 }
 
+/// The detector publishes only changes, so a turn that ends between two polls never produces
+/// an event. A reservation that detection has not confirmed within `SUBMIT_SETTLE` lapses back
+/// to the last detected status; every lifecycle entry point applies this, not just `observe`.
+fn expire_stale_reservation(state: &mut State, now: Instant) {
+    let Some(at) = state.submitted_at else { return };
+    if !state.reserved || now.saturating_duration_since(at) < SUBMIT_SETTLE {
+        return;
+    }
+    state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    state.status = state.observed.unwrap_or(AgentState::Unknown);
+    state.reserved = false;
+    state.submitted_at = None;
+}
+
 /// Input already reached the agent but the guard rejected the rest of the submission.
 pub(crate) const PARTIAL_DELIVERY: &str = "partial_delivery";
 
@@ -97,14 +111,9 @@ impl Lifecycle {
 
     fn observe_at(&self, status: AgentState, now: Instant) {
         let mut state = self.lock();
-        if state.observed == Some(status) {
-            let settling = state.reserved
-                && state
-                    .submitted_at
-                    .is_some_and(|at| now.saturating_duration_since(at) < SUBMIT_SETTLE);
-            if state.status == status || settling {
-                return;
-            }
+        expire_stale_reservation(&mut state, now);
+        if state.observed == Some(status) && (state.status == status || state.reserved) {
+            return;
         }
         state.observed = Some(status);
         state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
@@ -124,7 +133,12 @@ impl Lifecycle {
     }
 
     pub(crate) fn snapshot(&self) -> (AgentState, String) {
-        let state = self.lock();
+        self.snapshot_at(Instant::now())
+    }
+
+    fn snapshot_at(&self, now: Instant) -> (AgentState, String) {
+        let mut state = self.lock();
+        expire_stale_reservation(&mut state, now);
         (state.status, self.token(state.generation))
     }
 
@@ -139,19 +153,25 @@ impl Lifecycle {
     }
 
     pub(crate) fn submit(&self) -> Result<Delivery, &'static str> {
+        self.submit_at(Instant::now())
+    }
+
+    fn submit_at(&self, now: Instant) -> Result<Delivery, &'static str> {
         let mut state = self.lock();
+        expire_stale_reservation(&mut state, now);
         if state.status != AgentState::Idle || state.reserved {
             return Err("agent_busy");
         }
         state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         state.status = AgentState::Working;
         state.reserved = true;
-        state.submitted_at = Some(Instant::now());
+        state.submitted_at = Some(now);
         Ok(Delivery { owner: self.clone(), generation: state.generation, status: state.status, abort: false })
     }
 
     pub(crate) fn abort(&self, generation: &str) -> Result<Delivery, &'static str> {
-        let state = self.lock();
+        let mut state = self.lock();
+        expire_stale_reservation(&mut state, Instant::now());
         if !active(state.status) || self.token(state.generation) != generation {
             return Err("stale_generation");
         }
@@ -206,23 +226,37 @@ mod tests {
     }
 
     #[test]
-    fn fast_turn_between_polls_does_not_wedge_working() {
+    fn fast_turn_without_any_detector_event_does_not_wedge_working() {
+        // The detector publishes only changes, so a turn that ends between two polls
+        // produces no observe() call at all: expiry must not depend on one.
         let owner = Lifecycle::default();
         owner.observe(AgentState::Idle);
-        let _delivery = owner.submit().unwrap();
-        // The agent answered before detection ever saw Working: detection keeps saying Idle.
-        owner.observe_at(AgentState::Idle, Instant::now() + SUBMIT_SETTLE);
-        assert_eq!(owner.snapshot().0, AgentState::Idle);
-        assert!(owner.submit().is_ok(), "a finished turn must not leave the agent busy");
+        let start = Instant::now();
+        let _delivery = owner.submit_at(start).unwrap();
+        assert_eq!(owner.snapshot_at(start).0, AgentState::Working);
+        assert_eq!(owner.snapshot_at(start + SUBMIT_SETTLE).0, AgentState::Idle);
+        assert!(owner.submit_at(start + SUBMIT_SETTLE).is_ok());
+    }
+
+    #[test]
+    fn fast_turn_with_repeated_idle_observation_does_not_wedge_working() {
+        let owner = Lifecycle::default();
+        owner.observe(AgentState::Idle);
+        let start = Instant::now();
+        let _delivery = owner.submit_at(start).unwrap();
+        owner.observe_at(AgentState::Idle, start + SUBMIT_SETTLE);
+        assert_eq!(owner.snapshot_at(start + SUBMIT_SETTLE).0, AgentState::Idle);
+        assert!(owner.submit_at(start + SUBMIT_SETTLE).is_ok());
     }
 
     #[test]
     fn stale_idle_inside_settle_window_keeps_reservation() {
         let owner = Lifecycle::default();
         owner.observe(AgentState::Idle);
-        let _delivery = owner.submit().unwrap();
-        owner.observe_at(AgentState::Idle, Instant::now());
-        assert_eq!(owner.submit().unwrap_err(), "agent_busy");
+        let start = Instant::now();
+        let _delivery = owner.submit_at(start).unwrap();
+        owner.observe_at(AgentState::Idle, start);
+        assert_eq!(owner.submit_at(start).unwrap_err(), "agent_busy");
     }
 
     #[test]

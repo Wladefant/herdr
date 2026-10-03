@@ -950,9 +950,12 @@ impl PtyIoActorRunner {
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                    // Text (or part of it) already reached the agent when the guard rejected a later
+                    // chunk or Enter: report it as a partial delivery, never as "nothing written".
+                    let partial = self.current_write_offset > 0 || self.active_submission.as_ref().is_some_and(|s| !matches!(s.phase, SubmissionPhase::WritingText));
                     self.pending_writes.retain(|write| write.boundary.is_none());
                     self.current_write_offset = 0;
-                    self.fail_active_submission(err);
+                    self.fail_active_submission(if partial { crate::terminal::lifecycle::partial_delivery() } else { err });
                     return Ok(None);
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return Ok(None),

@@ -348,6 +348,7 @@ mod windows {
                     }) {
                         Err(input_submission_timed_out())
                     } else {
+                        let text_was_empty = text.is_empty();
                         let text_deadline =
                             deadline.and_then(|deadline| deadline.checked_sub(delay));
                         write_submission_part(&write_tx, text, text_deadline, guard.clone()).and_then(|()| {
@@ -360,7 +361,10 @@ mod windows {
                             if !*accepting {
                                 return Err(pty_actor_closed());
                             }
-                            write_submission_part(&write_tx, enter, None, guard.clone())
+                            write_submission_part(&write_tx, enter, None, guard.clone()).map_err(|err| {
+                                // The text is already in the agent's input box; a rejected Enter must not read as "nothing written".
+                                if err.kind() == std::io::ErrorKind::PermissionDenied && !text_was_empty { crate::terminal::lifecycle::partial_delivery() } else { err }
+                            })
                         })
                     };
                     if result.is_ok() { guard.complete(); }
@@ -662,6 +666,61 @@ mod windows {
             }
             assert_eq!(writer.writes.len(), 1);
             assert_eq!(writer.writes[0].0, b"prompt");
+        }
+
+        /// Drives the real forwarder + writer: guarded text, delay, guarded Enter.
+        fn run_guarded_submission(owner: &crate::terminal::lifecycle::Lifecycle, during_delay: impl FnOnce()) -> (Vec<Vec<u8>>, std::io::Result<()>) {
+            let delivery = owner.submit().unwrap();
+            let (flushed_tx, flushed_rx) = std_mpsc::channel();
+            let mut writer = RecordingWriter { writes: Vec::new(), flushes: Vec::new(), fail_after: None, flushed: flushed_tx };
+            let (data_tx, mut data_rx) = mpsc::channel(2);
+            let (write_tx, write_rx) = std_mpsc::channel();
+            let (reply_tx, reply_rx) = std_mpsc::channel();
+            let accepting = Arc::new(Mutex::new(true));
+            data_tx.try_send(PtyIoDataCommand::SubmitUserInput {
+                guard: InputGuard::Guarded(delivery),
+                text: Bytes::from_static(b"prompt"),
+                enter: Bytes::from_static(b"\r"),
+                delay: Duration::from_millis(150),
+                deadline: None,
+                reply: reply_tx,
+            }).unwrap();
+            let writer_thread = std::thread::spawn(move || { run_writer(&mut writer, write_rx); writer });
+            let input_write_tx = write_tx.clone();
+            let input_thread = std::thread::spawn(move || run_input_forwarder(&mut data_rx, input_write_tx, accepting));
+            flushed_rx.recv().expect("prompt was flushed");
+            during_delay();
+            let result = reply_rx.recv().expect("forwarder reports submission");
+            drop(data_tx);
+            input_thread.join().unwrap();
+            drop(write_tx);
+            let writer = writer_thread.join().unwrap();
+            (writer.writes.into_iter().map(|w| w.0).collect(), result)
+        }
+
+        #[test]
+        fn actor_reports_partial_delivery_when_generation_changes_between_text_and_enter() {
+            use crate::detect::AgentState;
+            use crate::terminal::lifecycle::{Lifecycle, PARTIAL_DELIVERY};
+            let owner = Lifecycle::default();
+            owner.observe(AgentState::Idle);
+            let (writes, result) = run_guarded_submission(&owner, || owner.observe(AgentState::Working));
+            let err = result.unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(err.to_string(), PARTIAL_DELIVERY);
+            assert_eq!(writes, vec![b"prompt".to_vec()], "Enter must not be written after the generation changed");
+        }
+
+        #[test]
+        fn actor_submission_survives_noop_recompute_and_stale_detection() {
+            use crate::detect::AgentState;
+            use crate::terminal::lifecycle::Lifecycle;
+            let owner = Lifecycle::default();
+            owner.observe(AgentState::Idle);
+            // Detection still reporting the pre-submit Idle must not cancel the Enter.
+            let (writes, result) = run_guarded_submission(&owner, || { owner.observe(AgentState::Idle); owner.observe(AgentState::Idle); });
+            result.unwrap();
+            assert_eq!(writes, vec![b"prompt".to_vec(), b"\r".to_vec()]);
         }
     }
 }

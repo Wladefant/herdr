@@ -9,6 +9,8 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug)]
 struct State {
     status: AgentState,
+    /// Last status reported by detection; submit/abort move `status` without touching it.
+    observed: Option<AgentState>,
     generation: u64,
     reserved: bool,
 }
@@ -28,6 +30,7 @@ impl Default for Lifecycle {
     fn default() -> Self {
         Self(Arc::new(Mutex::new(State {
             status: AgentState::Unknown,
+            observed: None,
             generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
             reserved: false,
         })))
@@ -42,6 +45,13 @@ fn stale() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::PermissionDenied, "stale_generation")
 }
 
+/// Input already reached the agent but the guard rejected the rest of the submission.
+pub(crate) const PARTIAL_DELIVERY: &str = "partial_delivery";
+
+pub(crate) fn partial_delivery() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, PARTIAL_DELIVERY)
+}
+
 impl Lifecycle {
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -51,6 +61,7 @@ impl Lifecycle {
         let mut state = self.lock();
         state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         state.status = AgentState::Unknown;
+        state.observed = None;
         state.reserved = false;
         write()
     }
@@ -60,13 +71,20 @@ impl Lifecycle {
             let mut state = poisoned.into_inner();
             state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
             state.status = AgentState::Unknown;
+            state.observed = None;
             state.reserved = false;
             state
         })
     }
 
+    /// Only a real change in the detected status invalidates outstanding operations; a no-op
+    /// recompute, or detection still reporting the pre-submit status, must not.
     pub(crate) fn observe(&self, status: AgentState) {
         let mut state = self.lock();
+        if state.observed == Some(status) {
+            return;
+        }
+        state.observed = Some(status);
         state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         state.status = status;
         state.reserved = false;
@@ -77,6 +95,7 @@ impl Lifecycle {
         let mut state = self.lock();
         state.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         state.status = AgentState::Unknown;
+        state.observed = None;
         state.reserved = false;
     }
 
@@ -144,6 +163,21 @@ impl Delivery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_observation_keeps_generation_and_reservation() {
+        let owner = Lifecycle::default();
+        owner.observe(AgentState::Working);
+        let token = owner.snapshot().1;
+        owner.observe(AgentState::Working);
+        assert_eq!(owner.snapshot().1, token);
+        assert!(owner.abort(&token).is_ok());
+        let idle = Lifecycle::default();
+        idle.observe(AgentState::Idle);
+        let _delivery = idle.submit().unwrap();
+        idle.observe(AgentState::Idle);
+        assert!(idle.submit().is_err(), "stale idle detection must not reopen a reserved turn");
+    }
 
     #[test]
     fn idle_snapshot_cannot_admit_after_competing_start() {

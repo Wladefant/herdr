@@ -29,6 +29,8 @@ impl App {
                 std::thread::spawn(move || {
                     let response = match completion.recv() {
                         Ok(Ok(())) => encode_success(id, result),
+                        Ok(Err(err)) if err.kind() == std::io::ErrorKind::PermissionDenied && err.to_string() == crate::terminal::lifecycle::PARTIAL_DELIVERY =>
+                            encode_error(id, "partial_delivery", "Prompt text reached the agent but Enter was not sent; the input box may hold unsent text. Not retried"),
                         Ok(Err(err)) if err.kind() == std::io::ErrorKind::PermissionDenied =>
                             encode_error(id, "stale_generation", "Lifecycle changed before delivery; nothing was retried"),
                         Ok(Err(err)) => encode_error(id, "agent_delivery_failed", err.to_string()),

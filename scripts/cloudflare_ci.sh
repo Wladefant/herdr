@@ -37,6 +37,16 @@ if ! command -v python3 >/dev/null; then
     exit 1
   fi
 fi
+if ! command -v tini >/dev/null; then
+  if command -v apt-get >/dev/null && [[ "$(id -u)" == "0" ]]; then
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y tini
+  else
+    echo "tini is required to reap orphaned test processes in Workers Builds" >&2
+    exit 1
+  fi
+fi
+
 
 cargo build --release --locked
 rustup show active-toolchain
@@ -97,7 +107,7 @@ PY
   rm -f "$output"
 }
 
-run_suite "ubuntu-nextest-all" cargo nextest run --locked -E 'all()' \
+run_suite "ubuntu-nextest-all" tini -s -- cargo nextest run --locked -E 'all()' \
   --status-level fail --final-status-level slow --failure-output final --success-output never
 run_suite "maintenance-unittest" python3 -m unittest \
   scripts.test_agent_detection_manifest_check scripts.test_changelog \

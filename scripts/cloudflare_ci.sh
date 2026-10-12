@@ -2,6 +2,42 @@
 set -euo pipefail
 
 # Mirror the portable Ubuntu checks in .github/workflows/ci.yml.
+# Workers Builds' nodejs@22 image does not include the Ubuntu CI toolchain.
+export PATH="$HOME/.cargo/bin:$HOME/.bun/bin:$PATH"
+if ! command -v cargo >/dev/null || ! rustc --version | grep -q '^rustc 1\.96\.1 '; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+    sh -s -- -y --default-toolchain 1.96.1 --component rustfmt,clippy
+  . "$HOME/.cargo/env"
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+if ! command -v just >/dev/null; then
+  cargo install --locked just
+fi
+if ! command -v cargo-nextest >/dev/null; then
+  cargo install --locked cargo-nextest
+fi
+if ! command -v bun >/dev/null || [[ "$(bun --version)" != "1.3.14" ]]; then
+  curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
+  export PATH="$HOME/.bun/bin:$PATH"
+fi
+if ! command -v zig >/dev/null || [[ "$(zig version)" != "0.16.0" ]]; then
+  zig_dir="$HOME/.cache/herdr-zig-0.16.0"
+  mkdir -p "$zig_dir"
+  curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz |
+    tar -xJ --strip-components=1 -C "$zig_dir"
+  export PATH="$zig_dir:$PATH"
+fi
+if ! command -v python3 >/dev/null; then
+  if command -v apt-get >/dev/null && [[ "$(id -u)" == "0" ]]; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y python3
+  else
+    echo "python3 is required for the existing maintenance and architecture tests" >&2
+    exit 1
+  fi
+fi
+
 cargo build --release --locked
 just lint
 

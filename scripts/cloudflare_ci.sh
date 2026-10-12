@@ -148,6 +148,14 @@ PY
   rm -f "$output"
 }
 
+echo "Python interpreter: $(command -v python3)"
+python3 --version
+echo "Herdr binary: $PWD/target/release/herdr"
+ls -l "$PWD/target/release/herdr"
+run_suite "letta-hook-diagnostic" tini -s -- cargo nextest run --locked \
+  -E 'test(letta_session_hook_is_silent_and_encodes_default_conversation)' \
+  --no-capture --status-level fail --final-status-level fail \
+  --failure-output final --success-output never
 run_suite "ubuntu-nextest-all" tini -s -- cargo nextest run --locked -E 'all()' \
   --status-level fail --final-status-level slow --failure-output final --success-output never
 run_suite "maintenance-unittest" python3 -m unittest \

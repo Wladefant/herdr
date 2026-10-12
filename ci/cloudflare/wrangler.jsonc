@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developers.cloudflare.com/workers/wrangler-schema.json",
+  "$schema": "https://developers.cloudflare.com/workers/wrangler/schema.json",
   "name": "herdr-ci",
   "main": "../../src/worker.js",
   "compatibility_date": "2026-10-12",

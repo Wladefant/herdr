@@ -1,0 +1,9 @@
+{
+  "$schema": "https://developers.cloudflare.com/workers/wrangler-schema.json",
+  "name": "herdr-ci",
+  "main": "../../src/worker.js",
+  "compatibility_date": "2026-10-12",
+  "account_id": "a0d288d1c95470cd009cc6e0df7accb7",
+  "workers_dev": false,
+  "preview_urls": false
+}

@@ -51,6 +51,10 @@ run_suite() {
   shift
   local output
   output="$(mktemp)"
+  if [[ "$suite" == "ubuntu-nextest-all" ]]; then
+    echo "PROCESS DIAGNOSTIC before $suite (PID, PPID, PGID, SID, state, command)"
+    ps -o pid,ppid,pgid,sid,stat,args -p "1,$$,${PPID}" || true
+  fi
   if "$@" 2>&1 | tee "$output"; then
     python3 - "$suite" "$output" <<'PY'
 import re
@@ -83,6 +87,10 @@ print(f"CI-SUITE {suite}: {passed} passed, {failed} failed")
 PY
   else
     local status=$?
+    if [[ "$suite" == "ubuntu-nextest-all" ]]; then
+      echo "PROCESS DIAGNOSTIC after $suite failure (PID, PPID, PGID, SID, state, command)"
+      ps -eo pid,ppid,pgid,sid,stat,args || true
+    fi
     rm -f "$output"
     return "$status"
   fi

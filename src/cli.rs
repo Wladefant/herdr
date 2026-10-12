@@ -23,10 +23,10 @@ macro_rules! println {
 }
 
 mod agent;
-mod lifecycle;
 mod api;
 mod completion;
 mod integration;
+mod lifecycle;
 mod machine;
 mod notification;
 mod pane;

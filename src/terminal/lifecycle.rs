@@ -1,6 +1,6 @@
 //! Admission and delivery share this lock. A snapshot never grants permission to write.
-use std::sync::{Arc, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::detect::AgentState;
@@ -143,12 +143,13 @@ impl Lifecycle {
     }
 
     fn token(&self, generation: u64) -> String {
-        
-        static EPOCH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| { let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos());
-        format!("{}-{nanos}", std::process::id()) });
-                let epoch = &*EPOCH;
+        static EPOCH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos());
+            format!("{}-{nanos}", std::process::id())
+        });
+        let epoch = &*EPOCH;
         format!("{epoch}-{generation}")
     }
 
@@ -166,7 +167,12 @@ impl Lifecycle {
         state.status = AgentState::Working;
         state.reserved = true;
         state.submitted_at = Some(now);
-        Ok(Delivery { owner: self.clone(), generation: state.generation, status: state.status, abort: false })
+        Ok(Delivery {
+            owner: self.clone(),
+            generation: state.generation,
+            status: state.status,
+            abort: false,
+        })
     }
 
     pub(crate) fn abort(&self, generation: &str) -> Result<Delivery, &'static str> {
@@ -175,7 +181,12 @@ impl Lifecycle {
         if !active(state.status) || self.token(state.generation) != generation {
             return Err("stale_generation");
         }
-        Ok(Delivery { owner: self.clone(), generation: state.generation, status: state.status, abort: true })
+        Ok(Delivery {
+            owner: self.clone(),
+            generation: state.generation,
+            status: state.status,
+            abort: true,
+        })
     }
 }
 
@@ -185,7 +196,10 @@ impl Delivery {
     }
 
     /// The owner remains locked through the actual PTY write, not just its enqueue.
-    pub(crate) fn write<T>(&self, write: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
+    pub(crate) fn write<T>(
+        &self,
+        write: impl FnOnce() -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
         let state = self.owner.lock();
         if state.generation != self.generation || !active(state.status) {
             return Err(stale());
@@ -222,7 +236,10 @@ mod tests {
         idle.observe(AgentState::Idle);
         let _delivery = idle.submit().unwrap();
         idle.observe(AgentState::Idle);
-        assert!(idle.submit().is_err(), "stale idle detection must not reopen a reserved turn");
+        assert!(
+            idle.submit().is_err(),
+            "stale idle detection must not reopen a reserved turn"
+        );
     }
 
     #[test]
@@ -288,7 +305,12 @@ mod tests {
         let first = owner.submit().unwrap();
         assert_eq!(owner.submit().unwrap_err(), "agent_busy");
         let mut writes = 0;
-        first.write(|| { writes += 1; Ok(()) }).unwrap();
+        first
+            .write(|| {
+                writes += 1;
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(writes, 1);
     }
 
@@ -299,7 +321,12 @@ mod tests {
         let delivery = owner.submit().unwrap();
         owner.invalidate();
         let mut writes = 0;
-        assert!(delivery.write(|| { writes += 1; Ok(()) }).is_err());
+        assert!(delivery
+            .write(|| {
+                writes += 1;
+                Ok(())
+            })
+            .is_err());
         assert_eq!(writes, 0);
     }
 
@@ -312,7 +339,12 @@ mod tests {
         owner.observe(AgentState::Idle);
         let mut writes = 0;
         assert!(owner.abort(&generation).is_err());
-        assert!(delivery.write(|| { writes += 1; Ok(()) }).is_err());
+        assert!(delivery
+            .write(|| {
+                writes += 1;
+                Ok(())
+            })
+            .is_err());
         assert_eq!(writes, 0);
     }
 
@@ -326,7 +358,9 @@ mod tests {
         owner.observe(AgentState::Working);
         assert_ne!(owner.snapshot().1, generation);
         assert!(owner.abort(&generation).is_err());
-        assert!(delivery.write::<()>(|| panic!("stale abort reached PTY")).is_err());
+        assert!(delivery
+            .write::<()>(|| panic!("stale abort reached PTY"))
+            .is_err());
     }
 
     #[test]
@@ -347,10 +381,14 @@ mod tests {
         owner.observe(AgentState::Idle);
         let barrier = std::sync::Barrier::new(3);
         std::thread::scope(|scope| {
-            let clients: Vec<_> = (0..2).map(|_| scope.spawn(|| {
-                barrier.wait();
-                owner.submit()
-            })).collect();
+            let clients: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        owner.submit()
+                    })
+                })
+                .collect();
             barrier.wait();
             let mut admissions = 0;
             for client in clients {
@@ -368,12 +406,17 @@ mod tests {
         let owner = Lifecycle::default();
         owner.observe(AgentState::Idle);
         let delivery = owner.submit().unwrap();
-        delivery.write(|| {
-            std::thread::scope(|scope| {
-                scope.spawn(|| assert!(owner.0.try_lock().is_err())).join().unwrap();
-            });
-            Ok(())
-        }).unwrap();
+        delivery
+            .write(|| {
+                std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| assert!(owner.0.try_lock().is_err()))
+                        .join()
+                        .unwrap();
+                });
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
@@ -398,6 +441,8 @@ mod tests {
         });
         owner.observe(AgentState::Idle);
         assert!(owner.submit().is_err());
-        assert!(delivery.write::<()>(|| panic!("poisoned writer was called")).is_err());
+        assert!(delivery
+            .write::<()>(|| panic!("poisoned writer was called"))
+            .is_err());
     }
 }

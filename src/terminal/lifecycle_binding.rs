@@ -1,5 +1,5 @@
-use std::sync::{Arc, OnceLock};
 use super::lifecycle::{Delivery, Lifecycle};
+use std::sync::{Arc, OnceLock};
 
 /// Bound when the server pairs a terminal's state and PTY runtime.
 #[derive(Debug, Clone, Default)]
@@ -15,7 +15,9 @@ impl LifecycleBinding {
     }
 
     pub(crate) fn invalidate(&self) {
-        if let Some(owner) = self.0.get() { owner.invalidate(); }
+        if let Some(owner) = self.0.get() {
+            owner.invalidate();
+        }
     }
 
     pub(crate) fn write<T>(&self, write: impl FnOnce() -> T) -> T {
@@ -34,10 +36,15 @@ pub(crate) enum InputGuard {
 
 impl InputGuard {
     pub(crate) fn complete(&self) {
-        if let Self::Guarded(delivery) = self { delivery.complete(); }
+        if let Self::Guarded(delivery) = self {
+            delivery.complete();
+        }
     }
 
-    pub(crate) fn write<T>(&self, write: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
+    pub(crate) fn write<T>(
+        &self,
+        write: impl FnOnce() -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
         match self {
             Self::Untracked(binding) => binding.write(write),
             Self::Guarded(delivery) => delivery.write(write),

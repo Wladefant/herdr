@@ -2958,7 +2958,9 @@ impl HeadlessServer {
         }
         if let api::schema::Method::AgentLifecycle(params) = &msg.request.method {
             self.app.handle_lifecycle_request(
-                msg.request.id.clone(), params.clone(), msg.respond_to,
+                msg.request.id.clone(),
+                params.clone(),
+                msg.respond_to,
             );
             return true;
         }

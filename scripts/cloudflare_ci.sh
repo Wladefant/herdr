@@ -70,6 +70,33 @@ echo "Rust formatter config: none (no root rustfmt.toml or .rustfmt.toml)"
 
 just lint
 
+test_tmp_dir="$(python3 -c 'import tempfile; print(tempfile.gettempdir())')"
+echo "Test temporary directory: $test_tmp_dir"
+if command -v findmnt >/dev/null; then
+  findmnt --noheadings --output TARGET,FSTYPE,OPTIONS --target "$test_tmp_dir" || true
+fi
+test_tmp_probe="$test_tmp_dir/herdr-exec-probe-$$"
+printf '#!/bin/sh\nexit 0\n' > "$test_tmp_probe"
+chmod +x "$test_tmp_probe"
+if "$test_tmp_probe" >/dev/null 2>&1; then
+  echo "Test temporary directory supports executable files"
+  rm -f "$test_tmp_probe"
+else
+  rm -f "$test_tmp_probe"
+  echo "Test temporary directory does not support executable files; using target/ temp storage"
+  test_tmp_dir="$PWD/target/herdr-test-tmp"
+  mkdir -p "$test_tmp_dir"
+  test_tmp_probe="$test_tmp_dir/herdr-exec-probe-$$"
+  printf '#!/bin/sh\nexit 0\n' > "$test_tmp_probe"
+  chmod +x "$test_tmp_probe"
+  if ! "$test_tmp_probe" >/dev/null 2>&1; then
+    echo "Target directory does not support executable test fixtures" >&2
+    exit 1
+  fi
+  rm -f "$test_tmp_probe"
+  export TMPDIR="$test_tmp_dir"
+fi
+
 run_suite() {
   local suite="$1"
   shift

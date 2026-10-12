@@ -3,11 +3,22 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-const load = (name: string): any =>
-  Bun.YAML.parse(readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8"));
+type WorkflowStep = { name?: string; run?: string; env?: Record<string, string> };
+type WorkflowLeg = { os?: string; target?: string; name?: string };
+type WorkflowJob = {
+  "runs-on"?: string;
+  strategy?: { matrix?: { os?: string[]; include?: WorkflowLeg[] } };
+  steps?: WorkflowStep[];
+  needs?: string[];
+  if?: string;
+};
+type Workflow = { on: { push?: unknown; pull_request?: unknown }; jobs: Record<string, WorkflowJob> };
+const load = (name: string): Workflow =>
+  Bun.YAML.parse(readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8")) as Workflow;
 const preview = load("preview");
 const release = load("release");
-const adminGate = release.jobs["validate-release-source"].steps[0];
+const adminGate = release.jobs["validate-release-source"].steps?.[0];
+if (!adminGate?.run || !adminGate.env) throw new Error("release source gate is missing required fields");
 
 describe("official publishing workflow boundaries", () => {
   test("publishing is tag-only while normal PR CI remains enabled", () => {
@@ -16,21 +27,32 @@ describe("official publishing workflow boundaries", () => {
     expect(load("ci").on.pull_request).toBeDefined();
   });
 
+  test("Linux CI checks move to Cloudflare while title validation remains", () => {
+    const ci = load("ci");
+    expect(ci.jobs).toHaveProperty("conventional-commits");
+    expect(ci.jobs).not.toHaveProperty("check");
+  });
+
   test("preview checks do not require a workstation Windows SDK", () => {
-    const checks = preview.jobs.preflight.steps.find((step: any) => step.name === "Run checks");
-    expect(checks.run.trim().split("\n")).toEqual(["just ci", "just docs-contract-test"]);
-    expect(preview.jobs.build.strategy.matrix.include).toEqual([
+    const checks = preview.jobs.preflight.steps?.find((step) => step.name === "Run checks");
+    expect(checks?.run?.trim().split("\n") ?? []).toEqual(["just ci", "just docs-contract-test"]);
+    expect(preview.jobs.build.strategy?.matrix?.include).toEqual([
       { target: "x86_64-unknown-linux-musl", os: "ubuntu-latest", name: "herdr-linux-x86_64" },
       { target: "aarch64-unknown-linux-musl", os: "ubuntu-latest", name: "herdr-linux-aarch64" },
     ]);
-    expect(preview.jobs.publish.needs).toContain("build");
+    expect(release.jobs.build.strategy?.matrix?.include?.map((leg) => leg.target)).toEqual([
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+    ]);
+    expect(preview.jobs.publish.needs ?? []).toContain("build");
   });
 
   test("all workflow jobs and matrix legs use Linux runners only", () => {
     const directory = new URL("../.github/workflows/", import.meta.url);
-    for (const file of readdirSync(directory).filter((name) => name.endsWith(".yml"))) {
-      const workflow = Bun.YAML.parse(readFileSync(new URL(file, directory), "utf8"));
-      for (const [name, job] of Object.entries<any>(workflow.jobs ?? {})) {
+      const source = readFileSync(new URL(file, directory), "utf8");
+      expect(source, file).not.toMatch(/herdr-(?:macos|windows)|(?:macos|windows)-x86_64/i);
+      const workflow = Bun.YAML.parse(source) as Workflow;
+      for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
         if (typeof job["runs-on"] === "string") {
           expect(job["runs-on"], `${file}:${name}`).not.toMatch(/windows|macos/i);
         }
@@ -41,7 +63,7 @@ describe("official publishing workflow boundaries", () => {
         for (const leg of matrix.include ?? []) {
           expect(leg.os ?? "", `${file}:${name}`).not.toMatch(/windows|macos/i);
           expect(leg.target ?? "", `${file}:${name}`).not.toMatch(/apple-darwin|windows-msvc/i);
-        }
+          expect(leg.name ?? "", `${file}:${name}`).not.toMatch(/windows|macos/i);
       }
     }
   });
@@ -53,9 +75,9 @@ describe("official publishing workflow boundaries", () => {
     ] as const) {
       for (const name of names) {
         const job = workflow.jobs[name];
-        expect(job.if).toContain("github.event_name == 'push'");
-        expect(job.if).toContain("startsWith(github.ref, 'refs/tags/");
-        expect(job.steps[0]).toEqual(adminGate);
+        expect(job.if ?? "").toContain("github.event_name == 'push'");
+        expect(job.if ?? "").toContain("startsWith(github.ref, 'refs/tags/");
+        expect(job.steps?.[0]).toEqual(adminGate);
       }
     }
     expect(adminGate.run).toContain('"$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"');

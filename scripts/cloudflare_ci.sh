@@ -100,6 +100,7 @@ run_suite "maintenance-unittest" python3 -m unittest \
   scripts.test_windows_cross scripts.test_windows_input
 run_suite "ui-hot-path-architecture" python3 -m unittest scripts.test_ui_hot_path_architecture
 run_suite "integration-assets" bun test src/integration/assets/herdr-agent-state.test.ts
+run_suite "workflow-contracts" bun test scripts/release-workflows.test.ts
 run_suite "scalar-libghostty-nextest" env LIBGHOSTTY_VT_SIMD=false LIBGHOSTTY_VT_OPTIMIZE=ReleaseSafe \
   cargo nextest run --locked -E 'package(ghostty-vt) | test(ghostty)' \
     --status-level fail --final-status-level fail --failure-output final --success-output never

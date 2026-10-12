@@ -39,6 +39,11 @@ if ! command -v python3 >/dev/null; then
 fi
 
 cargo build --release --locked
+rustup show active-toolchain
+rustc --version
+rustfmt --version
+echo "Rust formatter config: none (no root rustfmt.toml or .rustfmt.toml)"
+
 just lint
 
 run_suite() {

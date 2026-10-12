@@ -133,7 +133,10 @@ class ReleaseTests(unittest.TestCase):
 
     def test_published_preview_requires_immutable_complete_release_and_matching_remote_tag(self):
         payload = {"tag_name": "preview-test", "draft": False, "prerelease": True,
-                   "immutable": True, "assets": [{"name": name} for name in release.ASSETS]}
+                   "immutable": True, "assets": [
+                       {"name": "herdr-linux-x86_64"},
+                       {"name": "herdr-linux-aarch64"},
+                   ]}
         real_git = release.git
 
         def git(*args):

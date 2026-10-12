@@ -27,20 +27,13 @@ from scripts.changelog import (
 
 
 def release_assets(version: str) -> dict[str, str]:
-    normalized = version.removeprefix("v")
-    return {
-        **default_release_assets(normalized),
-        "windows-x86_64": f"https://github.com/herdrdev/herdr/releases/download/v{normalized}/herdr-windows-x86_64.zip",
-    }
+    return default_release_assets(version)
 
 
 def release_sha256() -> dict[str, str]:
     return {
         "linux-x86_64": "a" * 64,
         "linux-aarch64": "b" * 64,
-        "macos-x86_64": "c" * 64,
-        "macos-aarch64": "d" * 64,
-        "windows-x86_64": "e" * 64,
     }
 
 
@@ -58,9 +51,6 @@ def release_assets_with_digests() -> list[dict[str, str]]:
         for target, digest in (
             ("linux-x86_64", "a"),
             ("linux-aarch64", "b"),
-            ("macos-x86_64", "c"),
-            ("macos-aarch64", "d"),
-            ("windows-x86_64", "e"),
         )
     ]
 
@@ -129,9 +119,6 @@ class ChangelogScriptTests(unittest.TestCase):
             {
                 "linux-x86_64": "https://github.com/herdrdev/herdr/releases/download/v0.1.1/herdr-linux-x86_64",
                 "linux-aarch64": "https://github.com/herdrdev/herdr/releases/download/v0.1.1/herdr-linux-aarch64",
-                "macos-x86_64": "https://github.com/herdrdev/herdr/releases/download/v0.1.1/herdr-macos-x86_64",
-                "macos-aarch64": "https://github.com/herdrdev/herdr/releases/download/v0.1.1/herdr-macos-aarch64",
-                "windows-x86_64": "https://github.com/herdrdev/herdr/releases/download/v0.1.1/herdr-windows-x86_64.zip",
             },
         )
         self.assertEqual(manifest["releases"]["0.1.1"]["assets"], manifest["assets"])
@@ -407,7 +394,7 @@ class ChangelogScriptTests(unittest.TestCase):
             )
 
     def test_manifest_from_release_payload_rejects_missing_asset(self) -> None:
-        with self.assertRaisesRegex(ChangelogError, "missing asset herdr-macos-aarch64"):
+        with self.assertRaisesRegex(ChangelogError, "missing asset herdr-linux-aarch64"):
             manifest_from_release_payload(
                 {
                     "tagName": "v0.1.1",
@@ -416,8 +403,6 @@ class ChangelogScriptTests(unittest.TestCase):
                     "body": "### Fixed\n- One\n",
                     "assets": [
                         {"name": "herdr-linux-x86_64", "url": "https://example.com/linux-x86_64"},
-                        {"name": "herdr-linux-aarch64", "url": "https://example.com/linux-aarch64"},
-                        {"name": "herdr-macos-x86_64", "url": "https://example.com/macos-x86_64"},
                     ],
                 },
                 "0.1.1",
@@ -434,7 +419,7 @@ class ChangelogScriptTests(unittest.TestCase):
         ensure_manifest_is_outdated({"version": "0.1.0"}, "0.1.1")
 
     def test_canonicalize_manifest_requires_all_asset_targets(self) -> None:
-        with self.assertRaisesRegex(ChangelogError, "missing asset URL for macos-aarch64"):
+        with self.assertRaisesRegex(ChangelogError, "missing asset URL for linux-aarch64"):
             canonicalize_manifest(
                 {
                     "version": "0.1.1",
@@ -442,8 +427,6 @@ class ChangelogScriptTests(unittest.TestCase):
                     "notes": "### Fixed\n- One",
                     "assets": {
                         "linux-x86_64": "https://example.com/linux-x86_64",
-                        "linux-aarch64": "https://example.com/linux-aarch64",
-                        "macos-x86_64": "https://example.com/macos-x86_64",
                     },
                 },
                 "test manifest",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -19,12 +19,31 @@ describe("official publishing workflow boundaries", () => {
   test("preview checks do not require a workstation Windows SDK", () => {
     const checks = preview.jobs.preflight.steps.find((step: any) => step.name === "Run checks");
     expect(checks.run.trim().split("\n")).toEqual(["just ci", "just docs-contract-test"]);
-    expect(preview.jobs.build.strategy.matrix.include).toContainEqual({
-      target: "x86_64-pc-windows-msvc",
-      os: "windows-latest",
-      name: "herdr-windows-x86_64.zip",
-    });
+    expect(preview.jobs.build.strategy.matrix.include).toEqual([
+      { target: "x86_64-unknown-linux-musl", os: "ubuntu-latest", name: "herdr-linux-x86_64" },
+      { target: "aarch64-unknown-linux-musl", os: "ubuntu-latest", name: "herdr-linux-aarch64" },
+    ]);
     expect(preview.jobs.publish.needs).toContain("build");
+  });
+
+  test("all workflow jobs and matrix legs use Linux runners only", () => {
+    const directory = new URL("../.github/workflows/", import.meta.url);
+    for (const file of readdirSync(directory).filter((name) => name.endsWith(".yml"))) {
+      const workflow = Bun.YAML.parse(readFileSync(new URL(file, directory), "utf8"));
+      for (const [name, job] of Object.entries<any>(workflow.jobs ?? {})) {
+        if (typeof job["runs-on"] === "string") {
+          expect(job["runs-on"], `${file}:${name}`).not.toMatch(/windows|macos/i);
+        }
+        const matrix = job.strategy?.matrix ?? {};
+        for (const os of matrix.os ?? []) {
+          expect(os, `${file}:${name}`).not.toMatch(/windows|macos/i);
+        }
+        for (const leg of matrix.include ?? []) {
+          expect(leg.os ?? "", `${file}:${name}`).not.toMatch(/windows|macos/i);
+          expect(leg.target ?? "", `${file}:${name}`).not.toMatch(/apple-darwin|windows-msvc/i);
+        }
+      }
+    }
   });
 
   test("each publishing job rechecks both actors before using credentials", () => {

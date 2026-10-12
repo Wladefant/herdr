@@ -34,7 +34,7 @@ class PreviewNotesTests(unittest.TestCase):
                 notes=notes,
                 shas={
                     "linux-x86_64": "deadbeef",
-                    "windows-x86_64": "a" * 64,
+                    "linux-aarch64": "b" * 64,
                 },
                 retain=30,
                 endpoint_generation=77,
@@ -51,36 +51,31 @@ class PreviewNotesTests(unittest.TestCase):
                 "deadbeef",
             )
             self.assertEqual(
-                data["assets"]["windows-x86_64"]["url"],
-                "https://github.com/herdrdev/herdr/releases/download/preview-2026-06-02-abcdef123456/herdr-windows-x86_64.zip",
+                set(data["assets"]),
+                {"linux-x86_64", "linux-aarch64"},
             )
-            self.assertEqual(
-                data["assets"]["windows-x86_64"]["sha256"],
-                "a" * 64,
-            )
-            self.assertEqual(data["assets"]["windows-x86_64"]["format"], "zip")
             self.assertIn("2026-06-02-abcdef123456", data["builds"])
             self.assertEqual(
                 data["builds"]["2026-06-02-abcdef123456"]["endpoint_generation"],
                 77,
             )
 
-    def test_windows_preview_asset_requires_sha256(self):
+    def test_preview_manifest_excludes_native_platform_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(ValueError, "windows-x86_64 requires"):
-                preview.build_manifest(
-                    output=Path(tmp) / "preview.json",
-                    repo="herdrdev/herdr",
-                    tag="preview-test",
-                    build_id="test",
-                    commit="abcdef",
-                    built_at="2026-06-02T03:00:00Z",
-                    base_version="0.6.6",
-                    protocol=12,
-                    notes="test",
-                    shas={},
-                    retain=1,
-                )
+            data = json.loads(preview.build_manifest(
+                output=Path(tmp) / "preview.json",
+                repo="herdrdev/herdr",
+                tag="preview-test",
+                build_id="test",
+                commit="abcdef",
+                built_at="2026-06-02T03:00:00Z",
+                base_version="0.6.6",
+                protocol=12,
+                notes="test",
+                shas={},
+                retain=1,
+            ))
+            self.assertEqual(set(data["assets"]), {"linux-x86_64", "linux-aarch64"})
 
     def test_preview_range_base_advances_to_stable_tag(self):
         with (

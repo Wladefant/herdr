@@ -38,14 +38,28 @@ if ! command -v python3 >/dev/null; then
   fi
 fi
 if ! command -v tini >/dev/null; then
-  if command -v apt-get >/dev/null && [[ "$(id -u)" == "0" ]]; then
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y tini
-  else
-    echo "tini is required to reap orphaned test processes in Workers Builds" >&2
-    exit 1
-  fi
+  tini_dir="$HOME/.cache/herdr-tini-0.19.0"
+  mkdir -p "$tini_dir"
+  tini_path="$tini_dir/tini"
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-amd64 \
+    -o "$tini_path"
+  python3 - "$tini_path" <<'PY'
+import hashlib
+import sys
+
+path = sys.argv[1]
+with open(path, "rb") as binary:
+    digest = hashlib.sha256(binary.read()).hexdigest()
+expected = "c5b0666b4cb676901f90dfcb37106783c5fe2077b04590973b885950611b30ee"
+if digest != expected:
+    raise SystemExit(f"tini checksum mismatch: {digest}")
+print(f"Tini v0.19.0 SHA-256 verified: {digest}")
+PY
+  chmod +x "$tini_path"
+  export PATH="$tini_dir:$PATH"
 fi
+tini --version
 
 
 cargo build --release --locked

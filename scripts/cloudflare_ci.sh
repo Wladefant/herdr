@@ -37,6 +37,17 @@ if ! command -v python3 >/dev/null; then
     exit 1
   fi
 fi
+if command -v asdf >/dev/null 2>&1; then
+  python3_path="$(asdf which python3)"
+  if [[ ! -x "$python3_path" ]]; then
+    echo "asdf resolved python3 to a missing executable: $python3_path" >&2
+    exit 1
+  fi
+  export PATH="$(dirname "$python3_path"):$PATH"
+fi
+echo "Python interpreter: $(command -v python3)"
+python3 --version
+
 if ! command -v tini >/dev/null; then
   tini_dir="$HOME/.cache/herdr-tini-0.19.0"
   mkdir -p "$tini_dir"
@@ -70,32 +81,6 @@ echo "Rust formatter config: none (no root rustfmt.toml or .rustfmt.toml)"
 
 just lint
 
-test_tmp_dir="$(python3 -c 'import tempfile; print(tempfile.gettempdir())')"
-echo "Test temporary directory: $test_tmp_dir"
-if command -v findmnt >/dev/null; then
-  findmnt --noheadings --output TARGET,FSTYPE,OPTIONS --target "$test_tmp_dir" || true
-fi
-test_tmp_probe="$test_tmp_dir/herdr-exec-probe-$$"
-printf '#!/bin/sh\nexit 0\n' > "$test_tmp_probe"
-chmod +x "$test_tmp_probe"
-if "$test_tmp_probe" >/dev/null 2>&1; then
-  echo "Test temporary directory supports executable files"
-  rm -f "$test_tmp_probe"
-else
-  rm -f "$test_tmp_probe"
-  echo "Test temporary directory does not support executable files; using target/ temp storage"
-  test_tmp_dir="$PWD/target/herdr-test-tmp"
-  mkdir -p "$test_tmp_dir"
-  test_tmp_probe="$test_tmp_dir/herdr-exec-probe-$$"
-  printf '#!/bin/sh\nexit 0\n' > "$test_tmp_probe"
-  chmod +x "$test_tmp_probe"
-  if ! "$test_tmp_probe" >/dev/null 2>&1; then
-    echo "Target directory does not support executable test fixtures" >&2
-    exit 1
-  fi
-  rm -f "$test_tmp_probe"
-  export TMPDIR="$test_tmp_dir"
-fi
 
 run_suite() {
   local suite="$1"
@@ -148,14 +133,6 @@ PY
   rm -f "$output"
 }
 
-echo "Python interpreter: $(command -v python3)"
-python3 --version
-echo "Herdr binary: $PWD/target/release/herdr"
-ls -l "$PWD/target/release/herdr"
-run_suite "letta-hook-diagnostic" tini -s -- cargo nextest run --locked \
-  -E 'test(letta_session_hook_is_silent_and_encodes_default_conversation)' \
-  --no-capture --status-level fail --final-status-level fail \
-  --failure-output final --success-output never
 run_suite "ubuntu-nextest-all" tini -s -- cargo nextest run --locked -E 'all()' \
   --status-level fail --final-status-level slow --failure-output final --success-output never
 run_suite "maintenance-unittest" python3 -m unittest \

@@ -5,6 +5,9 @@ use crate::api::schema::{AgentLifecycleAction, AgentLifecycleParams, AgentStatus
 use crate::app::App;
 use crate::detect::AgentState;
 
+type LifecycleCompletion = std::sync::mpsc::Receiver<std::io::Result<()>>;
+type LifecycleResponse = (ResponseResult, Option<LifecycleCompletion>);
+
 fn status(state: AgentState) -> AgentStatus {
     match state {
         AgentState::Idle => AgentStatus::Idle,
@@ -50,13 +53,7 @@ impl App {
         &mut self,
         id: &str,
         params: AgentLifecycleParams,
-    ) -> Result<
-        (
-            ResponseResult,
-            Option<std::sync::mpsc::Receiver<std::io::Result<()>>>,
-        ),
-        String,
-    > {
+    ) -> Result<LifecycleResponse, String> {
         let resolved = self
             .resolve_agent_target(&params.target)
             .map_err(|err| encode_error_body(id.to_owned(), self.agent_target_error_body(err)))?;

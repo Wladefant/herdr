@@ -2,10 +2,10 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
-mod lifecycle;
 mod env;
 mod integrations;
 mod layouts;
+mod lifecycle;
 mod panes;
 pub(crate) mod plugins;
 pub(super) mod responses;

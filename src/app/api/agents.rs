@@ -19,7 +19,10 @@ pub(super) const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300
 // synchronously when it receives a non-character key, so appending one after the paste gives the
 // submission a deterministic paste boundary regardless of prompt size or delivery speed.
 #[cfg(windows)]
-pub(super) fn append_codex_paste_boundary(runtime: &crate::terminal::TerminalRuntime, text: &mut Vec<u8>) {
+pub(super) fn append_codex_paste_boundary(
+    runtime: &crate::terminal::TerminalRuntime,
+    text: &mut Vec<u8>,
+) {
     let keys = match crate::app::api_helpers::encode_api_keys(runtime, &["right".to_string()]) {
         Ok(keys) => keys,
         Err(key) => {

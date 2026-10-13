@@ -26,10 +26,14 @@ impl TerminalRuntime {
     }
 
     pub(crate) fn queue_guarded_submission(
-        &self, text: Bytes, enter: Bytes, delay: std::time::Duration,
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
         delivery: super::lifecycle::Delivery,
     ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
-        self.0.queue_guarded_submission(text, enter, delay, delivery)
+        self.0
+            .queue_guarded_submission(text, enter, delay, delivery)
     }
 
     pub fn shutdown(self) {

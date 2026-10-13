@@ -1,7 +1,7 @@
-pub(crate) mod lifecycle;
-pub(crate) mod lifecycle_binding;
 mod history_read;
 mod id;
+pub(crate) mod lifecycle;
+pub(crate) mod lifecycle_binding;
 mod runtime;
 mod runtime_registry;
 pub mod state;

@@ -278,7 +278,11 @@ pub enum ResponseResult {
         projection_revision: u64,
     },
     Ok {},
-    AgentLifecycle { status: AgentStatus, generation: String, delivered: bool },
+    AgentLifecycle {
+        status: AgentStatus,
+        generation: String,
+        delivered: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

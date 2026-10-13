@@ -1503,7 +1503,9 @@ impl PaneRuntimeIo {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.try_write_user_input(bytes),
             #[cfg(test)]
-            PaneRuntimeIo::TestChannel { sender, lifecycle, .. } => lifecycle.write(|| sender.try_send(bytes)),
+            PaneRuntimeIo::TestChannel {
+                sender, lifecycle, ..
+            } => lifecycle.write(|| sender.try_send(bytes)),
         }
     }
 
@@ -1537,18 +1539,23 @@ impl PaneRuntimeIo {
                 }
             }
             #[cfg(test)]
-            PaneRuntimeIo::TestChannel { sender, lifecycle, .. } => {
+            PaneRuntimeIo::TestChannel {
+                sender, lifecycle, ..
+            } => {
                 let _ = deadline;
                 lifecycle.invalidate();
                 let lifecycle = lifecycle.clone();
                 let sender = sender.clone();
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = lifecycle.write(|| sender.try_send(text))
+                    let result = lifecycle
+                        .write(|| sender.try_send(text))
                         .map_err(std::io::Error::other)
                         .and_then(|()| {
                             std::thread::sleep(delay);
-                            lifecycle.write(|| sender.try_send(enter)).map_err(std::io::Error::other)
+                            lifecycle
+                                .write(|| sender.try_send(enter))
+                                .map_err(std::io::Error::other)
                         });
                     let _ = reply_tx.send(result);
                 });
@@ -2106,23 +2113,33 @@ impl PaneRuntime {
     }
 
     pub(crate) fn queue_guarded_submission(
-        &self, text: Bytes, enter: Bytes, delay: std::time::Duration,
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
         delivery: crate::terminal::lifecycle::Delivery,
     ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
         match &self.io {
-            PaneRuntimeIo::Actor(actor) => actor.queue_guarded_submission(text, enter, delay, delivery),
+            PaneRuntimeIo::Actor(actor) => {
+                actor.queue_guarded_submission(text, enter, delay, delivery)
+            }
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, .. } => {
                 let sender = sender.clone();
                 let (reply, completion) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = delivery.write(|| sender.try_send(text).map_err(std::io::Error::other))
+                    let result = delivery
+                        .write(|| sender.try_send(text).map_err(std::io::Error::other))
                         .and_then(|()| {
                             std::thread::sleep(delay);
-                            if enter.is_empty() { return Ok(()); }
+                            if enter.is_empty() {
+                                return Ok(());
+                            }
                             delivery.write(|| sender.try_send(enter).map_err(std::io::Error::other))
                         });
-                    if result.is_ok() { delivery.complete(); }
+                    if result.is_ok() {
+                        delivery.complete();
+                    }
                     let _ = reply.send(result);
                 });
                 Ok(completion)

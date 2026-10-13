@@ -166,7 +166,10 @@ pub struct TerminalState {
 }
 
 impl TerminalState {
-    fn replace_persisted_session(&mut self, session: Option<crate::agent_resume::PersistedAgentSession>) {
+    fn replace_persisted_session(
+        &mut self,
+        session: Option<crate::agent_resume::PersistedAgentSession>,
+    ) {
         if self.persisted_agent_session != session {
             self.lifecycle.invalidate();
         }
@@ -2344,7 +2347,10 @@ impl TerminalState {
         self.metadata_report_agents.clear();
         self.suppressed_full_lifecycle_hook_reports.clear();
         self.stale_full_lifecycle_hook_sessions.clear();
-        { self.lifecycle.invalidate(); self.state = AgentState::Unknown; };
+        {
+            self.lifecycle.invalidate();
+            self.state = AgentState::Unknown;
+        };
         self.last_agent_state_change_seq = None;
         self.last_agent_completion_seq = None;
         self.launch_argv = None;
@@ -2432,7 +2438,7 @@ impl TerminalState {
 
         let presentation = self.effective_presentation_for_state_at(state, now);
         self.clear_expiry_pending_for_hidden_metadata();
-                self.lifecycle.observe(state);
+        self.lifecycle.observe(state);
 
         if previous_agent_label == agent_label
             && previous_state == state

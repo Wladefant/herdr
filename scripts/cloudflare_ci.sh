@@ -111,7 +111,7 @@ else:
     if unittest:
         passed, failed = int(unittest[-1]), 0
     else:
-        bun = re.findall(r"(\d+) pass(?:ed)?\s*\n(\d+) fail(?:ed)?", text)
+        bun = re.findall(r"\s*(\d+)\s+pass(?:ed)?\s*\n\s*(\d+)\s+fail(?:ed)?", text)
         if not bun:
             raise SystemExit(f"{suite}: could not parse a test result summary")
         passed, failed = int(bun[-1][0]), int(bun[-1][1])

@@ -103,11 +103,9 @@ nextest = re.findall(
     text,
 )
 if nextest:
-    total, passed, explicit_failed, skipped = nextest[-1]
+    _total, passed, explicit_failed, _skipped = nextest[-1]
     passed = int(passed)
     failed = int(explicit_failed or 0)
-    skipped = int(skipped or 0)
-    failed += int(total) - passed - failed - skipped
 else:
     unittest = re.findall(r"Ran (\d+) tests? in [^\n]+\n\nOK", text)
     if unittest:
